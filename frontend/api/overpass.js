@@ -22,7 +22,10 @@ export default async function handler(req, res) {
     try {
       const upstream = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'Dijkstra-Visualizer/1.0 (https://dijkstra-visualizer-delta.vercel.app)',
+        },
         body: 'data=' + encodeURIComponent(query),
       });
 
