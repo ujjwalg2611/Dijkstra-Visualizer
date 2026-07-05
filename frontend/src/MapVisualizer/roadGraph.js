@@ -7,7 +7,7 @@
 //   adj:   Map<id, Array<{ to, weight }>>   // weight = segment length in metres
 // which is exactly what dijkstraOnGraph() expects.
 
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+const OVERPASS_PROXY_URL = '/api/overpass';
 
 // Road types a car can actually drive on. We skip footways, cycleways, steps,
 // etc. so the route is a real driving route, not a shortcut through a park.
@@ -63,12 +63,17 @@ export async function buildRoadGraph(bbox) {
     out body;
   `;
 
-  const res = await fetch(OVERPASS_URL, {
+  const res = await fetch(OVERPASS_PROXY_URL, {
     method: 'POST',
-    body: 'data=' + encodeURIComponent(query),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
   });
   if (!res.ok) {
-    throw new Error(`Overpass request failed (${res.status}). Try again in a moment — the public server is rate-limited.`);
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ||
+        `Overpass request failed (${res.status}). Try again in a moment — the public server is rate-limited.`
+    );
   }
   const data = await res.json();
 
