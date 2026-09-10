@@ -1,57 +1,81 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const {exec} = require('child_process');
-const fs = require('fs');
 
 const app = express();
-const port = 3001;
+const port = process.env.PORT || 3001;
 
 app.use(bodyParser.json());
 app.use(cors());
 
-app.post('/api/cpp', (req, res) => {
-  const code = req.body.code;
-  const fileName = 'main.cpp';
-  const outputFileName = process.platform === 'win32' ? 'main.exe' : './main';
+const PISTON_URL = 'https://emkc.org/api/v2/piston/execute';
 
-  fs.writeFileSync(fileName, code);
-
-  exec(
-    `g++ ${fileName} -o main && ${outputFileName}`,
-    (error, stdout, stderr) => {
-      if (error) {
-        res.json({status: 'error', message: stderr});
-        return;
-      }
-      res.json({status: 'success', stdout: stdout, stderr: stderr});
-    },
-  );
-});
-
-app.post('/api/java', (req, res) => {
-  const code = req.body.code;
-  const fileName = 'Main.java';
-
-  fs.writeFileSync(fileName, code);
-
-  exec(`javac ${fileName} && java Main`, (error, stdout, stderr) => {
-    if (error) {
-      res.json({status: 'error', message: stderr});
-      return;
-    }
-    res.json({status: 'success', stdout: stdout, stderr: stderr});
+async function runOnPiston(language, code) {
+  const response = await fetch(PISTON_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      language,
+      version: '*',
+      files: [{ content: code }],
+    }),
   });
+
+  if (!response.ok) {
+    throw new Error(`Piston API error: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+app.post('/api/cpp', async (req, res) => {
+  const code = req.body.code;
+  try {
+    const result = await runOnPiston('cpp', code);
+
+    if (result.compile && result.compile.code !== 0) {
+      return res.json({ status: 'error', message: result.compile.stderr || result.compile.output });
+    }
+    if (result.run.code !== 0) {
+      return res.json({ status: 'error', message: result.run.stderr || result.run.output });
+    }
+
+    res.json({ status: 'success', stdout: result.run.stdout, stderr: result.run.stderr });
+  } catch (error) {
+    res.json({ status: 'error', message: error.message });
+  }
 });
 
-app.post('/api/javascript', (req, res) => {
+app.post('/api/java', async (req, res) => {
   const code = req.body.code;
-
   try {
-    const result = eval(code);
-    res.json({status: 'success', result: result});
+    const result = await runOnPiston('java', code);
+
+    if (result.compile && result.compile.code !== 0) {
+      return res.json({ status: 'error', message: result.compile.stderr || result.compile.output });
+    }
+    if (result.run.code !== 0) {
+      return res.json({ status: 'error', message: result.run.stderr || result.run.output });
+    }
+
+    res.json({ status: 'success', stdout: result.run.stdout, stderr: result.run.stderr });
   } catch (error) {
-    res.json({status: 'error', message: error.message});
+    res.json({ status: 'error', message: error.message });
+  }
+});
+
+app.post('/api/javascript', async (req, res) => {
+  const code = req.body.code;
+  try {
+    const result = await runOnPiston('javascript', code);
+
+    if (result.run.code !== 0) {
+      return res.json({ status: 'error', message: result.run.stderr || result.run.output });
+    }
+
+    res.json({ status: 'success', stdout: result.run.stdout, stderr: result.run.stderr });
+  } catch (error) {
+    res.json({ status: 'error', message: error.message });
   }
 });
 
