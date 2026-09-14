@@ -1,8 +1,15 @@
-// Vercel serverless function: proxies "Run Code" requests to the Piston
-// execution API. Lives at /api/cpp, /api/java, /api/javascript (same origin
-// as the frontend, so no CORS setup or separate host is needed).
-const PISTON_URL = 'https://emkc.org/api/v2/piston/execute';
-const ALLOWED_LANGUAGES = new Set(['cpp', 'java', 'javascript']);
+// Vercel serverless function: proxies "Run Code" requests to the CodeX
+// execution API (free, no signup/key required). Lives at /api/cpp,
+// /api/java, /api/javascript (same origin as the frontend, so no CORS
+// setup or separate host is needed).
+const CODEX_URL = 'https://api.codex.jaagrav.in';
+
+// Frontend route segment -> CodeX's language code
+const LANGUAGE_MAP = {
+  cpp: 'cpp',
+  java: 'java',
+  javascript: 'js',
+};
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -11,7 +18,8 @@ export default async function handler(req, res) {
   }
 
   const { language } = req.query;
-  if (!ALLOWED_LANGUAGES.has(language)) {
+  const codexLanguage = LANGUAGE_MAP[language];
+  if (!codexLanguage) {
     return res.status(400).json({ status: 'error', message: `Unsupported language: ${language}` });
   }
 
@@ -21,33 +29,32 @@ export default async function handler(req, res) {
   }
 
   try {
-    const upstream = await fetch(PISTON_URL, {
+    const body = new URLSearchParams({
+      code,
+      language: codexLanguage,
+      input: '',
+    });
+
+    const upstream = await fetch(CODEX_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        language,
-        version: '*',
-        files: [{ content: code }],
-      }),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
     });
 
     if (!upstream.ok) {
-      throw new Error(`Piston API error: ${upstream.status}`);
+      throw new Error(`CodeX API error: ${upstream.status}`);
     }
 
     const result = await upstream.json();
 
-    if (result.compile && result.compile.code !== 0) {
-      return res.status(200).json({ status: 'error', message: result.compile.stderr || result.compile.output });
-    }
-    if (result.run.code !== 0) {
-      return res.status(200).json({ status: 'error', message: result.run.stderr || result.run.output });
+    if (result.error) {
+      return res.status(200).json({ status: 'error', message: result.error });
     }
 
     return res.status(200).json({
       status: 'success',
-      stdout: result.run.stdout,
-      stderr: result.run.stderr,
+      stdout: result.output ?? '',
+      stderr: '',
     });
   } catch (error) {
     return res.status(200).json({ status: 'error', message: error.message });
