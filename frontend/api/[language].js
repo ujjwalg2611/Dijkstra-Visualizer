@@ -1,55 +1,58 @@
 // Vercel serverless function: runs "Run Code" submissions server-side.
 //
-// Primary engine: Piston (https://github.com/engineer-man/piston), the same
-// public code-execution API this project's own backend/server.js already
-// uses. It's stable and used in production by lots of projects.
+// Primary engine: Judge0 CE's free public community instance
+// (https://ce.judge0.com). Unlike api.judge0.com (which has required a
+// RapidAPI key since 2020) and the Piston public API (which stopped being
+// key-free on Feb 15, 2026), ce.judge0.com does not require an API key.
+// It is soft rate-limited per IP, so it can occasionally be slow/queued,
+// but it's the most reliable free, no-auth option available right now.
 //
-// Fallback engine: CodeX (api.codex.jaagrav.in) — a free hobby API that the
-// project used to rely on exclusively. Its own README says "very early
-// stages of development, consider not using in production", and in
-// practice it frequently returns 503 (that's the "CodeX API error: 503"
-// you were seeing). It's kept here only as a second attempt in case Piston
-// is ever rate-limited or briefly unavailable.
-const PISTON_URL = 'https://emkc.org/api/v2/piston/execute';
+// Fallback engine: CodeX (api.codex.jaagrav.in) — kept only as a second
+// attempt in case Judge0 is ever briefly unavailable. Its own README
+// says "very early stages of development, consider not using in
+// production," so it should not be relied on alone.
+const JUDGE0_URL = 'https://ce.judge0.com/submissions?base64_encoded=false&wait=true';
 const CODEX_URL = 'https://api.codex.jaagrav.in';
 
-// Frontend route segment -> language identifiers for each engine, plus the
-// filename extension Piston should use (helps some compilers/interpreters
-// pick the right mode).
+// Frontend route segment -> language identifiers for each engine.
+// Judge0 language IDs are fixed IDs from its /languages catalog.
 const LANGUAGES = {
-  cpp: { piston: 'c++', codex: 'cpp', filename: 'main.cpp' },
-  java: { piston: 'java', codex: 'java', filename: 'Main.java' },
-  javascript: { piston: 'javascript', codex: 'js', filename: 'main.js' },
+  cpp: { judge0Id: 54, codex: 'cpp' },       // C++ (GCC 9.2.0)
+  java: { judge0Id: 62, codex: 'java' },     // Java (OpenJDK 13.0.1)
+  javascript: { judge0Id: 63, codex: 'js' }, // JavaScript (Node.js 12.14.0)
 };
 
-async function runOnPiston(pistonLanguage, filename, code) {
-  const response = await fetch(PISTON_URL, {
+async function runOnJudge0(languageId, code) {
+  const response = await fetch(JUDGE0_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      language: pistonLanguage,
-      version: '*',
-      files: [{ name: filename, content: code }],
+      source_code: code,
+      language_id: languageId,
+      stdin: '',
     }),
   });
 
   if (!response.ok) {
-    throw new Error(`Piston API error: ${response.status}`);
+    throw new Error(`Judge0 API error: ${response.status}`);
   }
 
   const result = await response.json();
 
-  if (result.compile && result.compile.code !== 0) {
-    return { status: 'error', message: result.compile.stderr || result.compile.output };
+  // status.id: 3 = Accepted (ran successfully). 6 = Compilation Error.
+  // Anything else (runtime error, TLE, MLE, etc.) also counts as a failure
+  // to surface to the user.
+  if (result.status && result.status.id === 6) {
+    return { status: 'error', message: result.compile_output || 'Compilation error' };
   }
-  if (!result.run) {
-    throw new Error('Piston API returned an unexpected response');
-  }
-  if (result.run.code !== 0) {
-    return { status: 'error', message: result.run.stderr || result.run.output };
+  if (result.status && result.status.id !== 3) {
+    return {
+      status: 'error',
+      message: result.stderr || result.compile_output || result.status.description || 'Execution failed',
+    };
   }
 
-  return { status: 'success', stdout: result.run.stdout, stderr: result.run.stderr || '' };
+  return { status: 'success', stdout: result.stdout || '', stderr: result.stderr || '' };
 }
 
 async function runOnCodex(codexLanguage, code) {
@@ -94,7 +97,7 @@ export default async function handler(req, res) {
   let lastError = null;
 
   try {
-    const result = await runOnPiston(langConfig.piston, langConfig.filename, code);
+    const result = await runOnJudge0(langConfig.judge0Id, code);
     return res.status(200).json(result);
   } catch (err) {
     lastError = err.message;
@@ -104,7 +107,7 @@ export default async function handler(req, res) {
     const result = await runOnCodex(langConfig.codex, code);
     return res.status(200).json(result);
   } catch (err) {
-    lastError = `Piston failed (${lastError}); CodeX also failed (${err.message})`;
+    lastError = `Judge0 failed (${lastError}); CodeX also failed (${err.message})`;
   }
 
   return res.status(200).json({
